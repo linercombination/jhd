@@ -102,7 +102,7 @@ Recommended layout:
 - different colors for trunk arm, left arm, and right arm
 - larger rigid markers for plug, earbuds, and junction
 - optional playback controls: play, pause, step, speed
-- optional event highlighting for loop formation and threading
+- optional event highlighting for nonlocal contacts and persistent loop-capture proxy events
 
 `Metric Dashboard`
 
@@ -197,6 +197,11 @@ Suggested playback loop:
 7. render the scene
 
 This design is simple enough for a course project and is fully compatible with precomputed simulation output.
+
+In the current implementation, the viewer also renders:
+
+- contact lines between nonlocal contacting bead pairs
+- a rigid-body highlight only for the specific terminal bead whose persistent loop-capture proxy event is active
 
 ### 3.8 Detailed implementation plan for the summary page
 
@@ -466,7 +471,7 @@ This gives a stable and easy-to-debug initial configuration.
 
 ### 5.7 Detailed dynamics implementation plan
 
-The simulation engine should use overdamped Langevin dynamics with an Euler-Maruyama style update.
+The simulation engine should use overdamped Langevin-style dynamics with an Euler-Maruyama style update.
 
 At each simulation step:
 
@@ -498,6 +503,15 @@ for step in range(num_steps):
 ```
 
 This is enough for a first working version.
+
+In the current demo implementation, the deterministic force field is represented by:
+
+- soft bond relaxation forces
+- bending/smoothing forces along each arm
+- soft excluded-volume repulsion between nonlocal beads
+- soft wall repulsion inside the pocket box
+
+The agitation is represented by a mixture of correlated directional pushing, sinusoidal low-frequency forcing, and random kicks.
 
 ### 5.8 Detailed force model plan
 
@@ -549,6 +563,13 @@ Persistence logic:
 
 This design is not mathematically perfect, but it is implementable and defendable for the course project.
 
+In the current implementation, the detector is realized as a **persistent loop-capture proxy**:
+
+1. detect nonlocal near-closures as candidate loops
+2. approximate a local loop region from a small triangle built along the same arm segment
+3. test whether a rigid terminal bead enters that region
+4. keep the event only if it persists for at least two sampled frames
+
 ### 5.10 Detailed metric computation plan
 
 The first engineering version should compute metrics at each sampled frame.
@@ -562,9 +583,11 @@ Frame-level metrics:
 Suggested summary metrics for one run:
 
 - `threading_ever`: whether threading ever happened
-- `threading_count_total`
+- `threading_event_count`: number of distinct persistent threading-proxy event IDs
+- `threading_active_frame_count`: number of sampled frames in which at least one persistent threading-proxy event is active
 - `contact_count_max`
 - `contact_count_mean`
+- `contact_persistence_mean`: average persistence score of repeated nonlocal contacts
 - `tangle_score_final`
 - `tangle_score_mean`
 
@@ -754,7 +777,7 @@ If time becomes tight, the minimum viable demo should still include:
 - one configurable Y-shaped cable model
 - one pocket box environment
 - one simulation run shown as 3D animation
-- one threading or tangling metric
+- one threading-proxy or tangling metric
 - one parameter comparison plot
 - one simple summary page based on precomputed batch results
 

@@ -5,7 +5,13 @@ from statistics import mean, pstdev
 from typing import Any
 
 from .dynamics import simulate_trajectory
-from .events import compute_frame_metrics, detect_contacts, detect_threading
+from .events import (
+    compute_contact_persistence,
+    compute_frame_metrics,
+    detect_contacts,
+    detect_threading_candidates,
+    update_persistent_threading,
+)
 from .geometry import build_initial_geometry
 
 
@@ -24,21 +30,44 @@ def run_simulation(config: dict[str, Any]) -> dict[str, Any]:
 
     frames: list[dict[str, Any]] = []
     metrics_series: list[dict[str, float]] = []
+    frame_contacts: list[list[list[int]]] = []
+    frame_threading_candidates: list[list[str]] = []
 
     for frame in trajectory:
         contacts = detect_contacts(
             frame["positions"],
             model["radii"],
-            model["bond_pairs"],
+            model["graph_steps"],
             padding=0.5 * config["geometry"]["d_cable"],
         )
-        threading = detect_threading(
+        threading_candidates = detect_threading_candidates(
             frame["positions"],
             model["indices"],
             model["radii"],
+            model["arm_segments"],
+            model["graph_steps"],
             config["geometry"]["d_cable"],
         )
-        metric = compute_frame_metrics(contacts, threading)
+        frame_contacts.append(contacts)
+        frame_threading_candidates.append(threading_candidates)
+
+    persistent_threading_per_frame = update_persistent_threading(
+        frame_threading_candidates,
+        min_persistent_frames=2,
+    )
+    contact_persistence = compute_contact_persistence(
+        frame_contacts,
+        min_persistent_frames=2,
+    )
+
+    for frame, contacts, threading, persistence_value in zip(
+        trajectory,
+        frame_contacts,
+        persistent_threading_per_frame,
+        contact_persistence,
+        strict=False,
+    ):
+        metric = compute_frame_metrics(contacts, threading, persistence_value)
         metric["time"] = frame["time"]
         metrics_series.append(metric)
         frames.append(
@@ -49,11 +78,15 @@ def run_simulation(config: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
+    threading_event_ids = sorted({event_id for frame_events in persistent_threading_per_frame for event_id in frame_events})
     summary = {
         "threading_ever": any(m["N_thread"] > 0 for m in metrics_series),
-        "threading_count_total": int(sum(m["N_thread"] for m in metrics_series)),
+        "threading_event_count": len(threading_event_ids),
+        "threading_count_total": len(threading_event_ids),
+        "threading_active_frame_count": sum(1 for m in metrics_series if m["N_thread"] > 0),
         "contact_count_max": max((m["N_contact"] for m in metrics_series), default=0.0),
         "contact_count_mean": mean(m["N_contact"] for m in metrics_series) if metrics_series else 0.0,
+        "contact_persistence_mean": mean(contact_persistence) if contact_persistence else 0.0,
         "tangle_score_final": metrics_series[-1]["S_tangle"] if metrics_series else 0.0,
         "tangle_score_mean": mean(m["S_tangle"] for m in metrics_series) if metrics_series else 0.0,
         "bead_metadata": {

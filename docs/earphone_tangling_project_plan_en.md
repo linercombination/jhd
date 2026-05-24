@@ -157,7 +157,7 @@ rather than on atomic-scale electronic structure.
 
 ### 4.1 Recommended dynamics
 
-For this project, the main dynamical model should be **overdamped Langevin dynamics** rather than pure Monte Carlo reconfiguration:
+For this project, the main dynamical model should be **overdamped Langevin-style dynamics** rather than pure Monte Carlo reconfiguration:
 
 ```text
 gamma * d r_i / dt = -grad_i(U) + xi_i(t) + f_i^agitation(t)
@@ -179,6 +179,8 @@ Monte Carlo pivot or crankshaft moves are very useful for equilibrium conformati
 - discussing the effect of the **environment**
 
 Langevin-style dynamics is a better main framework. Monte Carlo can still be kept as a comparison tool or as a simplified baseline.
+
+In the current engineering implementation, this is realized as a **force-based overdamped update with soft bond, bending, excluded-volume, and wall-repulsion terms**, plus colored-agitation and random forcing. It is therefore closer to a mesoscopic Langevin proxy than to a fully rigorous molecular-dynamics integrator.
 
 ### 4.3 Pocket environment model
 
@@ -268,6 +270,15 @@ This gives a binary or integer-valued threading count:
 N_thread = number of active loop-capture events
 ```
 
+In the current version of the demo, the event detector is implemented as a **loop-capture proxy** rather than a rigorous loop-surface crossing algorithm:
+
+1. detect candidate loops by nonlocal near-closure of distant contour locations
+2. approximate the loop using a small triangle or local loop region
+3. mark a threading-like event when a rigid terminal component enters that region
+4. keep only events that persist for at least a small number of sampled frames
+
+This is a scientifically weaker but still explainable version of the intended observable, and it should be described honestly as a proxy rather than a strict topological classifier.
+
 ### 5.3 Secondary observable: nonlocal contact count
 
 Define `N_contact` as the number of bead pairs or segment pairs satisfying:
@@ -284,6 +295,12 @@ Short accidental touches should not be treated the same as stable tangles. There
 - `T_persist`: cumulative lifetime of nonlocal contacts or threading events
 
 This distinguishes transient collisions from persistent entanglement.
+
+In the current demo implementation, the persistence contribution is implemented more narrowly as a **contact-persistence proxy**:
+
+- repeated nonlocal contact pairs are tracked from frame to frame
+- only contact pairs that persist for at least a small number of sampled frames contribute
+- the reported summary value is therefore closer to an average persistence score for repeated nonlocal contacts than to a full contact-plus-threading lifetime integral
 
 ### 5.5 Secondary observable: untangling cost
 
@@ -310,6 +327,14 @@ with positive weights `w1-w4`.
 
 This score is not a fundamental invariant. It is a **physically interpretable engineering metric** for the severity of tangling in daily use.
 
+In the current demo implementation, `S_tangle` is still a simplified engineering score based on:
+
+- active persistent loop-capture proxy events
+- nonlocal contact count
+- a simple nonlocal-contact persistence contribution
+
+The explicit `C_untangle` term is not implemented yet and should be treated as future work.
+
 ### 5.7 Advanced topological analysis as an optional extension
 
 If we later want a more topological analysis, two extensions are possible:
@@ -328,7 +353,7 @@ The project should include both process-level and summary-level visualization.
 - 3D animation of the earphone inside the pocket
 - distinct colors for the trunk arm, left arm, and right arm
 - larger rendered spheres or capsules for plug, earbuds, and junction
-- highlighted contacts and detected loop-capture events
+- highlighted contacts and detected loop-capture proxy events
 
 ### 6.2 Diagnostic visualization
 
@@ -348,9 +373,9 @@ The project should include both process-level and summary-level visualization.
 To keep the project feasible, the first complete version should contain:
 
 1. a 3D coarse-grained Y-shaped cable model
-2. overdamped Langevin dynamics in a rectangular pocket
+2. overdamped force-based Langevin-style dynamics in a rectangular pocket
 3. rigid hardware beads for plug, earbuds, and junction
-4. automatic detection of threading candidates and nonlocal contacts
+4. automatic detection of persistent loop-capture proxy events and nonlocal contacts
 5. one animation and a small parameter scan
 
 Recommended first parameter scan:
@@ -367,7 +392,7 @@ This is already enough for a scientifically coherent presentation.
 The report should explicitly state the following limitations.
 
 - The model is **coarse-grained**, not atomistic.
-- The main observable is **tangling severity / threading**, not a strict classical knot invariant.
+- The main observable is **tangling severity / threading proxy events**, not a strict classical knot invariant.
 - The agitation is an **effective non-equilibrium model** of pocket motion, not a detailed biomechanical reconstruction of human walking.
 - Quantitative agreement with a specific real earphone is not the immediate goal; the main goal is to identify **qualitative trends and parameter dependence**.
 

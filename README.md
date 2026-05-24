@@ -1,43 +1,49 @@
 # Earphone Tangling Demo
 
-This repository contains a runnable demo for the "Earphone Tangling in a Pocket" project.
+This repository contains a runnable demo for the course project "Earphone Tangling in a Pocket".
 
-## Structure
+The English documents are the authoritative versions for theory and engineering design. Chinese documents are synchronized counterparts for presentation and discussion.
+
+## Repository Structure
 
 ```text
-docs/       theory and engineering documents
+docs/       theory, engineering, and overview documents
 algorithm/  simulation and analysis engine
 backend/    FastAPI service
 frontend/   React + Three.js + ECharts demo
 data/runs/  generated run outputs
 ```
 
-## Features
+## Current Scope
 
 - Simulates a Y-shaped wired earphone cable inside a pocket-like box
-- Exposes single-run and batch-summary APIs
-- Visualizes trajectory playback with Three.js
-- Displays metric and trend charts with ECharts
-- Uses geometry-aware contact and threading thresholds so cable thickness and rigid-end sizes affect detection
-- Provides a Chinese frontend UI for classroom presentation
-- Provides a parameter control panel for geometry, mechanics, environment, and numerical settings
-- Includes short in-page explanations of the tested metrics so students can understand the plots quickly
+- Uses a coarse-grained force-based overdamped dynamics model
+- Detects nonlocal contacts and persistent threading-proxy events
+- Provides single-run playback and batch trend analysis
+- Uses a Chinese frontend UI for classroom presentation
 
 ## Demo Workflow
 
-1. Adjust parameters in the frontend control panel.
-2. Run a single simulation to view the 3D trajectory and time-series metrics.
-3. Run a batch scan on one selected parameter to generate a trend chart.
-4. Compare how parameter changes affect contact count, threading events, and the tangle score.
+1. Adjust geometry, mechanics, environment, and control parameters in the frontend.
+2. Run a single simulation to inspect the 3D trajectory and metric time series.
+3. Run a batch scan on one selected parameter.
+4. Compare how parameter changes affect contact count, threading-proxy probability, and tangle score.
 
 ## Frontend Panels
 
-- `可控参数设置`: edit geometry, mechanics, environment, control, and batch-scan settings
-- `三维模拟视图`: playback of the Y-shaped earphone trajectory in the pocket
-- `结果摘要`: quick summary of whether threading-like events occurred
-- `指标说明`: short student-friendly explanation of each plotted indicator
-- `指标变化图`: time evolution of contact count, threading events, and tangle score
-- `参数趋势分析`: aggregated batch trend chart for one scanned parameter
+- `Parameter Controls`: geometry, mechanics, environment, control, and batch-scan inputs
+- `3D Viewer`: playback of the Y-shaped earphone trajectory in the pocket
+- `Run Summary`: run-level summary of threading-proxy events and tangling indicators
+- `Metric Guide`: short student-friendly explanation of each metric
+- `Metric Time Series`: time evolution of `N_thread`, `N_contact`, and `S_tangle`
+- `Trend Analysis`: aggregated batch trend chart for the most recent scan
+
+## Core Metrics
+
+- `Contact count`: number of nonlocal bead pairs close enough to be counted as contacts
+- `Threading proxy events`: persistent loop-capture proxy events where a rigid terminal enters a local loop region
+- `Contact persistence`: persistence score of repeated nonlocal contacts across sampled frames
+- `Tangle score`: an engineering score combining persistent threading-proxy events, contact count, and contact persistence
 
 ## Quick Start
 
@@ -79,33 +85,16 @@ Backend default URL:
 - `GET /api/batches/{batch_id}/summary`
 - `GET /api/analysis/trends`
 
-## Key Parameters
-
-- `L_0`, `L_1`: trunk and branch lengths of the Y-shaped earphone
-- `d_cable`: cable diameter
-- `r_plug`, `r_earbud`, `r_junction`: rigid-end and junction sizes
-- `k_bend`: effective bending stiffness
-- `gamma`: damping strength
-- `agitation_amplitude`: magnitude of pocket agitation
-- `tau_a`: correlation time of the agitation
-- `W`, `H`, `T`: pocket width, height, and thickness
-- `num_steps`, `dt`, `sample_interval`, `seed`: numerical simulation controls
-
-## Metrics
-
-- `接触数 / Contact count`: how many non-bonded bead pairs are close enough to be considered a contact
-- `穿线事件数 / Threading events`: how often the plug or earbuds approach the junction closely enough to signal a knot-like event
-- `缠结评分 / Tangle score`: a simple combined score built from contact and threading information
-
 ## Documents
 
-- Theory and project-planning documents are stored in [docs](</E:/openSourceProject/jhd/docs>).
-- The English documents remain the authoritative versions for the theory and engineering plans.
+- Theory, engineering, and overview documents are stored in [docs](</E:/openSourceProject/jhd/docs>).
+- Authoritative theory document: [earphone_tangling_project_plan_en.md](/E:/openSourceProject/jhd/docs/earphone_tangling_project_plan_en.md)
+- Authoritative engineering document: [earphone_tangling_engineering_plan_en.md](/E:/openSourceProject/jhd/docs/earphone_tangling_engineering_plan_en.md)
+- Chinese overview document: [project overview (Chinese)](</E:/openSourceProject/jhd/docs/耳机线打结-项目执行方案.md>)
 
 ## Notes
 
-- The simulation is a coarse-grained engineering demo, not a production scientific package.
-- The frontend reads precomputed trajectory frames from the backend.
-- Batch trend plots are built from repeated runs and aggregated summaries.
-- The batch trend view automatically refreshes after a successful batch run and shows an inline error if loading fails.
-- The latest trend panel shows the most recently generated batch result stored by the backend.
+- This is a coarse-grained educational demo, not a production scientific simulator.
+- The frontend pocket visualization is aligned with the simulated `W/H/T`.
+- Threading highlights are terminal-specific rather than global.
+- The current threading detector is a geometrical proxy, not a strict topological knot classifier.

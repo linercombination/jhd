@@ -4,6 +4,28 @@ import math
 from typing import Any
 
 
+def _compute_graph_steps(num_nodes: int, bonds: list[list[int]]) -> list[list[int]]:
+    adjacency = [[] for _ in range(num_nodes)]
+    for i, j in bonds:
+        adjacency[i].append(j)
+        adjacency[j].append(i)
+
+    graph_steps: list[list[int]] = [[-1] * num_nodes for _ in range(num_nodes)]
+    for start in range(num_nodes):
+        queue = [start]
+        graph_steps[start][start] = 0
+        head = 0
+        while head < len(queue):
+            current = queue[head]
+            head += 1
+            for neighbor in adjacency[current]:
+                if graph_steps[start][neighbor] != -1:
+                    continue
+                graph_steps[start][neighbor] = graph_steps[start][current] + 1
+                queue.append(neighbor)
+    return graph_steps
+
+
 def build_initial_geometry(config: dict[str, Any]) -> dict[str, Any]:
     geometry = config["geometry"]
     b = geometry["b"]
@@ -58,6 +80,7 @@ def build_initial_geometry(config: dict[str, Any]) -> dict[str, Any]:
     radii[right_earbud_index] = geometry["r_earbud"]
     arm_segments["left"] = branch_indices["left"]
     arm_segments["right"] = branch_indices["right"]
+    graph_steps = _compute_graph_steps(len(positions), bonds)
 
     return {
         "positions": positions,
@@ -67,6 +90,7 @@ def build_initial_geometry(config: dict[str, Any]) -> dict[str, Any]:
         "bonds": bonds,
         "arm_segments": arm_segments,
         "bond_pairs": {tuple(sorted(bond)) for bond in bonds},
+        "graph_steps": graph_steps,
         "equilibrium_b": b,
         "indices": {
             "plug": plug_index,
