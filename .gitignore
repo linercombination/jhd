@@ -1,0 +1,32 @@
+# OS / editor
+Thumbs.db
+Desktop.ini
+.DS_Store
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+backend/.venv/
+
+# Node / frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+
+# Runtime outputs
+data/runs/*
+!data/runs/.gitkeep
