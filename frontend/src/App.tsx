@@ -464,7 +464,7 @@ export function App() {
       legend: { data: ["穿线事件数", "接触数", "缠结评分"] },
       xAxis: {
         type: "category",
-        name: "时间",
+        name: "时间 (s)",
         data: metrics.map((m) => m.time.toFixed(2)),
       },
       yAxis: { type: "value", name: "指标值" },
@@ -661,36 +661,36 @@ export function App() {
       <div className="grid">
         <section className="card wide">
           <h2>可控参数设置</h2>
-          <p className="meta">先调整参数，再运行单次模拟或批量分析。建议课堂展示时优先调节线材刚性、扰动强度和主干长度。</p>
+          <p className="meta">长度、半径、口袋尺寸和扰动相关时间使用 SI 单位；弯曲刚性、阻尼系数和随机种子等参数在本演示中采用无量纲或相对单位。</p>
           <div className="control-grid">
             <div className="control-group">
               <h3>几何参数</h3>
               <label>
-                主干长度 L0
+                主干长度 L0 (m)
                 <input type="number" step="0.01" value={configForm.geometry.L_0} onChange={(e) => updateSection("geometry", "L_0", e.target.value)} />
               </label>
               <label>
-                支链长度 L1
+                支链长度 L1 (m)
                 <input type="number" step="0.01" value={configForm.geometry.L_1} onChange={(e) => updateSection("geometry", "L_1", e.target.value)} />
               </label>
               <label>
-                线材直径
+                线材直径 (m)
                 <input type="number" step="0.005" value={configForm.geometry.d_cable} onChange={(e) => updateSection("geometry", "d_cable", e.target.value)} />
               </label>
               <label>
-                插头半径
+                插头半径 (m)
                 <input type="number" step="0.005" value={configForm.geometry.r_plug} onChange={(e) => updateSection("geometry", "r_plug", e.target.value)} />
               </label>
               <label>
-                耳机头半径
+                耳机头半径 (m)
                 <input type="number" step="0.005" value={configForm.geometry.r_earbud} onChange={(e) => updateSection("geometry", "r_earbud", e.target.value)} />
               </label>
               <label>
-                分叉点半径
+                分叉点半径 (m)
                 <input type="number" step="0.005" value={configForm.geometry.r_junction} onChange={(e) => updateSection("geometry", "r_junction", e.target.value)} />
               </label>
               <label>
-                珠子间距 b
+                珠子间距 b (m)
                 <input type="number" step="0.005" value={configForm.geometry.b} onChange={(e) => updateSection("geometry", "b", e.target.value)} />
               </label>
             </div>
@@ -698,31 +698,31 @@ export function App() {
             <div className="control-group">
               <h3>动力学参数</h3>
               <label>
-                弯曲刚性 k_bend
+                弯曲刚性 k_bend (无量纲)
                 <input type="number" step="0.1" value={configForm.mechanics.k_bend} onChange={(e) => updateSection("mechanics", "k_bend", e.target.value)} />
               </label>
               <label>
-                阻尼系数 gamma
+                阻尼系数 gamma (相对单位)
                 <input type="number" step="0.1" value={configForm.mechanics.gamma} onChange={(e) => updateSection("mechanics", "gamma", e.target.value)} />
               </label>
               <label>
-                扰动强度
+                扰动强度 (m)
                 <input type="number" step="0.005" value={configForm.environment.agitation_amplitude} onChange={(e) => updateSection("environment", "agitation_amplitude", e.target.value)} />
               </label>
               <label>
-                扰动相关时间 tau_a
+                扰动相关时间 tau_a (s)
                 <input type="number" step="0.5" value={configForm.environment.tau_a} onChange={(e) => updateSection("environment", "tau_a", e.target.value)} />
               </label>
               <label>
-                口袋宽度 W
+                口袋宽度 W (m)
                 <input type="number" step="0.05" value={configForm.environment.W} onChange={(e) => updateSection("environment", "W", e.target.value)} />
               </label>
               <label>
-                口袋高度 H
+                口袋高度 H (m)
                 <input type="number" step="0.05" value={configForm.environment.H} onChange={(e) => updateSection("environment", "H", e.target.value)} />
               </label>
               <label>
-                口袋厚度 T
+                口袋厚度 T (m)
                 <input type="number" step="0.01" value={configForm.environment.T} onChange={(e) => updateSection("environment", "T", e.target.value)} />
               </label>
             </div>
@@ -730,19 +730,19 @@ export function App() {
             <div className="control-group">
               <h3>数值控制</h3>
               <label>
-                模拟步数
+                模拟步数 (步)
                 <input type="number" step="1" value={configForm.control.num_steps} onChange={(e) => updateSection("control", "num_steps", e.target.value)} />
               </label>
               <label>
-                时间步长 dt
+                时间步长 dt (s)
                 <input type="number" step="0.01" value={configForm.control.dt} onChange={(e) => updateSection("control", "dt", e.target.value)} />
               </label>
               <label>
-                采样间隔
+                采样间隔 (步)
                 <input type="number" step="1" value={configForm.control.sample_interval} onChange={(e) => updateSection("control", "sample_interval", e.target.value)} />
               </label>
               <label>
-                随机种子
+                随机种子 (整数)
                 <input type="number" step="1" value={configForm.control.seed} onChange={(e) => updateSection("control", "seed", e.target.value)} />
               </label>
             </div>
@@ -752,17 +752,17 @@ export function App() {
               <label>
                 扫描参数
                 <select value={batchParameter} onChange={(e) => setBatchParameter(e.target.value as BatchParameter)}>
-                  <option value="k_bend">弯曲刚性 k_bend</option>
-                  <option value="gamma">阻尼系数 gamma</option>
-                  <option value="agitation_amplitude">扰动强度</option>
-                  <option value="tau_a">扰动相关时间 tau_a</option>
-                  <option value="L_0">主干长度 L0</option>
-                  <option value="L_1">支链长度 L1</option>
-                  <option value="d_cable">线材直径</option>
-                  <option value="r_plug">插头半径</option>
-                  <option value="r_earbud">耳机头半径</option>
-                  <option value="r_junction">分叉点半径</option>
-                  <option value="L_ratio">主干长度占比 L0 / (L0 + L1)</option>
+                  <option value="k_bend">弯曲刚性 k_bend (无量纲)</option>
+                  <option value="gamma">阻尼系数 gamma (相对单位)</option>
+                  <option value="agitation_amplitude">扰动强度 (m)</option>
+                  <option value="tau_a">扰动相关时间 tau_a (s)</option>
+                  <option value="L_0">主干长度 L0 (m)</option>
+                  <option value="L_1">支链长度 L1 (m)</option>
+                  <option value="d_cable">线材直径 (m)</option>
+                  <option value="r_plug">插头半径 (m)</option>
+                  <option value="r_earbud">耳机头半径 (m)</option>
+                  <option value="r_junction">分叉点半径 (m)</option>
+                  <option value="L_ratio">主干长度占比 L0 / (L0 + L1) (无量纲)</option>
                 </select>
               </label>
               <label>
@@ -770,7 +770,7 @@ export function App() {
                 <input type="text" value={batchValuesText} onChange={(e) => setBatchValuesText(e.target.value)} placeholder="例如 0.1, 0.3, 0.6, 0.9" />
               </label>
               <label>
-                每组重复次数
+                每组重复次数 (次)
                 <input type="number" step="1" value={batchRepeatsText} onChange={(e) => setBatchRepeatsText(e.target.value)} />
               </label>
               <p className="meta">批量分析会固定其余参数，只扫描这里选中的一个参数，用来生成趋势图。</p>
