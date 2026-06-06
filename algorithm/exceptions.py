@@ -1,0 +1,2 @@
+class SimulationCancelled(Exception):
+    pass

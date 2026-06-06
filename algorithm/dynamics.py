@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Any
+from typing import Any, Callable
+
+from .exceptions import SimulationCancelled
 
 
 def _zeros(num_points: int) -> list[list[float]]:
@@ -172,7 +174,12 @@ def _compute_random_forces(num_points: int, env: dict[str, float], gamma: float)
     return forces
 
 
-def simulate_trajectory(model: dict[str, Any], config: dict[str, Any]) -> list[dict[str, Any]]:
+def simulate_trajectory(
+    model: dict[str, Any],
+    config: dict[str, Any],
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    cancel_event: Any = None,
+) -> list[dict[str, Any]]:
     control = config["control"]
     env = config["environment"]
     mechanics = config["mechanics"]
@@ -184,7 +191,12 @@ def simulate_trajectory(model: dict[str, Any], config: dict[str, Any]) -> list[d
     k_bend = mechanics["k_bend"]
     correlated_push = [0.0, 0.0, 0.0]
 
-    for step in range(control["num_steps"] + 1):
+    total_steps = control["num_steps"]
+    progress_interval = max(1, min(control["sample_interval"], max(1, total_steps // 50)))
+
+    for step in range(total_steps + 1):
+        if cancel_event is not None and cancel_event.is_set():
+            raise SimulationCancelled("Simulation cancelled.")
         t = step * control["dt"]
         total_forces = _zeros(len(positions))
         bond_forces = _compute_bond_forces(positions, model["bonds"], model["equilibrium_b"], k_bend)
@@ -220,5 +232,14 @@ def simulate_trajectory(model: dict[str, Any], config: dict[str, Any]) -> list[d
 
         if step % control["sample_interval"] == 0:
             frames.append({"time": round(t, 4), "positions": [list(p) for p in positions]})
+        if progress_callback is not None and (step == 0 or step == total_steps or step % progress_interval == 0):
+            progress_callback(
+                {
+                    "phase": "simulate",
+                    "current_step": step,
+                    "total_steps": total_steps,
+                    "progress": step / total_steps if total_steps else 1.0,
+                }
+            )
 
     return frames

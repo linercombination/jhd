@@ -118,27 +118,83 @@ type BatchResponse = {
   representative_run?: SimulationSnapshot | null;
 };
 
+type BatchProgress = {
+  batch_id: string;
+  status: "queued" | "running" | "loading_result" | "finished" | "failed";
+  parameter: string;
+  values: number[];
+  repeats: number;
+  total_jobs: number;
+  completed_jobs: number;
+  progress: number;
+  current_value: number | null;
+  current_repeat: number | null;
+  started_at: string;
+  finished_at: string | null;
+  error: string | null;
+};
+
+type RunProgress = {
+  run_id: string;
+  task_id: string;
+  kind: "single";
+  status: "queued" | "running" | "loading_result" | "finished" | "failed" | "cancelled";
+  progress: number;
+  started_at: string;
+  finished_at: string | null;
+  error: string | null;
+  phase: string | null;
+  current_step: number;
+  total_steps: number;
+};
+
+const RUN_STATUS_LABELS: Record<RunProgress["status"], string> = {
+  queued: "单次模拟排队中",
+  running: "单次模拟进行中",
+  loading_result: "正在加载最终结果",
+  finished: "单次模拟已完成",
+  failed: "单次模拟失败",
+  cancelled: "单次模拟已中断",
+};
+
+const RUN_PHASE_LABELS: Record<string, string> = {
+  queued: "等待后端开始处理",
+  init: "正在初始化几何与参数",
+  simulate: "正在推进仿真步进",
+  postprocess: "正在整理指标与事件",
+  loading_result: "正在加载最终结果",
+  finished: "结果已准备完成",
+  failed: "任务执行失败",
+  cancelled: "任务已被中断",
+};
+
 const API_BASE = "http://localhost:8000";
+const VIEWPORT_SCALE_MIN = 0.7;
+const VIEWPORT_SCALE_MAX = 4.0;
+const VIEWPORT_FILL_TARGET = 0.6;
+const CAMERA_OFFSET = { x: 0.8, y: 1.05, z: 1.45 };
+const VIEW_ROTATE_SPEED = 0.0075;
+const VIEW_ELEVATION_LIMIT = Math.PI * 0.42;
 
 const DEFAULT_CONFIG: SimulationConfig = {
   geometry: {
-    L_0: 0.7,
-    L_1: 0.3,
-    d_cable: 0.02,
-    r_plug: 0.04,
-    r_earbud: 0.03,
-    r_junction: 0.035,
-    b: 0.05,
+    L_0: 0.8,
+    L_1: 0.2,
+    d_cable: 0.0025,
+    r_plug: 0.007,
+    r_earbud: 0.0075,
+    r_junction: 0.0065,
+    b: 0.02,
   },
   mechanics: {
     k_bend: 0.7,
     gamma: 1.0,
   },
   environment: {
-    W: 0.8,
-    H: 0.8,
-    T: 0.18,
-    agitation_amplitude: 0.02,
+    W: 0.252,
+    H: 0.177,
+    T: 0.056,
+    agitation_amplitude: 0.01,
     tau_a: 10.0,
   },
   control: {
@@ -325,6 +381,12 @@ function formatNumber(value: number | undefined, digits = 2): string {
   return value.toFixed(digits);
 }
 
+function formatDuration(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes} 分 ${seconds} 秒` : `${seconds} 秒`;
+}
+
 export function App() {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<HTMLDivElement | null>(null);
@@ -333,8 +395,34 @@ export function App() {
   const rigidMeshesRef = useRef<Record<number, THREE.Mesh>>({});
   const contactLineRefs = useRef<THREE.Line[]>([]);
   const pocketFrameRef = useRef<THREE.LineSegments | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rigidGroupRef = useRef<THREE.Group | null>(null);
   const contactGroupRef = useRef<THREE.Group | null>(null);
+  const viewZoomScaleRef = useRef(1);
+  const userAdjustedZoomRef = useRef(false);
+  const viewBaseZoomRef = useRef(1);
+  const viewTargetOffsetRef = useRef(new THREE.Vector3(0, 0, 0));
+  const viewOrbitRef = useRef({
+    azimuth: Math.atan2(CAMERA_OFFSET.x, CAMERA_OFFSET.z),
+    elevation: Math.atan2(
+      CAMERA_OFFSET.y,
+      Math.sqrt(CAMERA_OFFSET.x * CAMERA_OFFSET.x + CAMERA_OFFSET.z * CAMERA_OFFSET.z),
+    ),
+    distance: Math.sqrt(
+      CAMERA_OFFSET.x * CAMERA_OFFSET.x +
+        CAMERA_OFFSET.y * CAMERA_OFFSET.y +
+        CAMERA_OFFSET.z * CAMERA_OFFSET.z,
+    ),
+  });
+  const pointerInteractionRef = useRef<{
+    pointerId: number;
+    mode: "rotate" | "pan";
+    startX: number;
+    startY: number;
+    startAzimuth: number;
+    startElevation: number;
+    startOffset: THREE.Vector3;
+  } | null>(null);
 
   const [runId, setRunId] = useState("");
   const [frames, setFrames] = useState<Frame[]>([]);
@@ -352,6 +440,15 @@ export function App() {
   const [batchParameter, setBatchParameter] = useState<BatchParameter>("k_bend");
   const [batchValuesText, setBatchValuesText] = useState("0.1, 0.3, 0.6, 0.9");
   const [batchRepeatsText, setBatchRepeatsText] = useState("3");
+  const [activeRunId, setActiveRunId] = useState("");
+  const [runProgress, setRunProgress] = useState<RunProgress | null>(null);
+  const [runElapsedSeconds, setRunElapsedSeconds] = useState(0);
+  const [activeBatchId, setActiveBatchId] = useState("");
+  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
+  const [batchElapsedSeconds, setBatchElapsedSeconds] = useState(0);
+  const [viewZoomScale, setViewZoomScale] = useState(1);
+  const [viewerSize, setViewerSize] = useState({ width: 720, height: 560 });
+  const [viewerInteractionMode, setViewerInteractionMode] = useState<"idle" | "rotate" | "pan">("idle");
 
   const updateSection = <T extends keyof SimulationConfigForm, K extends keyof SimulationConfigForm[T]>(
     section: T,
@@ -378,8 +475,123 @@ export function App() {
     setPlaying(true);
   };
 
+  const applyAdaptiveView = (nextScale = viewZoomScaleRef.current, markAsManual = false) => {
+    const camera = cameraRef.current;
+    if (!camera) return;
+
+    const aspect = viewerSize.width / Math.max(viewerSize.height, 1);
+    const target = new THREE.Vector3(
+      activeConfig.environment.W / 2,
+      0,
+      0,
+    ).add(viewTargetOffsetRef.current);
+    const orbit = viewOrbitRef.current;
+    const planarDistance = orbit.distance * Math.cos(orbit.elevation);
+    const cameraPosition = new THREE.Vector3(
+      target.x + planarDistance * Math.sin(orbit.azimuth),
+      target.y + orbit.distance * Math.sin(orbit.elevation),
+      target.z + planarDistance * Math.cos(orbit.azimuth),
+    );
+    const distance = cameraPosition.distanceTo(target);
+    const visibleHeightAtZoom1 = 2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+    const visibleWidthAtZoom1 = visibleHeightAtZoom1 * Math.max(aspect, 0.1);
+    const zoomForHeight = (visibleHeightAtZoom1 * VIEWPORT_FILL_TARGET) / Math.max(activeConfig.environment.H, 1e-6);
+    const zoomForWidth = (visibleWidthAtZoom1 * VIEWPORT_FILL_TARGET) / Math.max(activeConfig.environment.W, 1e-6);
+    const baseZoom = Math.max(0.1, Math.min(zoomForHeight, zoomForWidth));
+    const clampedScale = Math.min(VIEWPORT_SCALE_MAX, Math.max(VIEWPORT_SCALE_MIN, nextScale));
+
+    camera.position.copy(cameraPosition);
+    camera.lookAt(target);
+    camera.zoom = baseZoom * clampedScale;
+    camera.updateProjectionMatrix();
+
+    viewBaseZoomRef.current = baseZoom;
+    viewZoomScaleRef.current = clampedScale;
+    if (markAsManual) {
+      userAdjustedZoomRef.current = true;
+    }
+    if (viewZoomScale !== clampedScale) {
+      setViewZoomScale(clampedScale);
+    }
+  };
+
+  const resetViewportPose = () => {
+    viewTargetOffsetRef.current.set(0, 0, 0);
+    viewOrbitRef.current = {
+      azimuth: Math.atan2(CAMERA_OFFSET.x, CAMERA_OFFSET.z),
+      elevation: Math.atan2(
+        CAMERA_OFFSET.y,
+        Math.sqrt(CAMERA_OFFSET.x * CAMERA_OFFSET.x + CAMERA_OFFSET.z * CAMERA_OFFSET.z),
+      ),
+      distance: Math.sqrt(
+        CAMERA_OFFSET.x * CAMERA_OFFSET.x +
+          CAMERA_OFFSET.y * CAMERA_OFFSET.y +
+          CAMERA_OFFSET.z * CAMERA_OFFSET.z,
+      ),
+    };
+  };
+
+  const resetViewportZoom = () => {
+    userAdjustedZoomRef.current = false;
+    applyAdaptiveView(1, false);
+  };
+
+  const fitViewportView = () => {
+    userAdjustedZoomRef.current = false;
+    resetViewportPose();
+    applyAdaptiveView(1, false);
+  };
+
+  const loadBatchResult = async (batchId: string) => {
+    const response = await fetch(`${API_BASE}/api/batches/${batchId}`);
+    if (!response.ok) {
+      throw new Error(`Batch result request failed with status ${response.status}`);
+    }
+
+    const batchResult: BatchResponse = await response.json();
+    if (batchResult.summary) {
+      setTrendError("");
+      setTrendData(batchResult.summary);
+    } else {
+      setTrendReloadToken((value) => value + 1);
+    }
+
+    if (batchResult.representative_run) {
+      applySimulationSnapshot(batchResult.representative_run, `${batchResult.batch_id} / sample`);
+    }
+  };
+
+  const loadRunResult = async (nextRunId: string) => {
+    const response = await fetch(`${API_BASE}/api/simulations/${nextRunId}`);
+    if (!response.ok) {
+      throw new Error(`Simulation result request failed with status ${response.status}`);
+    }
+    const payload = await response.json();
+    if (!payload?.config || !payload?.trajectory || !payload?.metrics || !payload?.summary) {
+      throw new Error("最终模拟结果不完整，请稍后重试。");
+    }
+    applySimulationSnapshot(
+      {
+        config: payload.config,
+        trajectory: payload.trajectory,
+        metrics: payload.metrics,
+        summary: payload.summary,
+      },
+      nextRunId,
+    );
+  };
+
+  const loadRunProgress = async (nextRunId: string) => {
+    const response = await fetch(`${API_BASE}/api/simulations/${nextRunId}/progress`);
+    if (!response.ok) {
+      throw new Error(`Simulation progress request failed with status ${response.status}`);
+    }
+    return (await response.json()) as RunProgress;
+  };
+
   useEffect(() => {
-    if (!mountRef.current) return;
+    const mountElement = mountRef.current;
+    if (!mountElement) return;
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color("#f4f1e8");
@@ -387,11 +599,22 @@ export function App() {
     const camera = new THREE.PerspectiveCamera(50, 720 / 440, 0.1, 100);
     camera.position.set(1.2, 1.05, 1.45);
     camera.lookAt(0.4, 0, 0);
+    cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(720, 440);
-    mountRef.current.innerHTML = "";
-    mountRef.current.appendChild(renderer.domElement);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    mountElement.innerHTML = "";
+    mountElement.appendChild(renderer.domElement);
+
+    const resizeRenderer = () => {
+      const width = mountElement.clientWidth || 720;
+      const height = mountElement.clientHeight || 440;
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      setViewerSize({ width, height });
+    };
+    resizeRenderer();
 
     scene.add(new THREE.AmbientLight(0xffffff, 1.12));
     const light = new THREE.DirectionalLight(0xffffff, 1.25);
@@ -433,8 +656,115 @@ export function App() {
     };
     renderLoop();
 
+    const resizeObserver = new ResizeObserver(() => {
+      resizeRenderer();
+    });
+    resizeObserver.observe(mountElement);
+
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const directionScale = Math.exp(-event.deltaY * 0.0015);
+      const nextScale = Math.min(
+        VIEWPORT_SCALE_MAX,
+        Math.max(VIEWPORT_SCALE_MIN, viewZoomScaleRef.current * directionScale),
+      );
+      applyAdaptiveView(nextScale, true);
+    };
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.button !== 0 && event.button !== 2) return;
+      const mode = event.button === 2 || event.shiftKey ? "pan" : "rotate";
+      pointerInteractionRef.current = {
+        pointerId: event.pointerId,
+        mode,
+        startX: event.clientX,
+        startY: event.clientY,
+        startAzimuth: viewOrbitRef.current.azimuth,
+        startElevation: viewOrbitRef.current.elevation,
+        startOffset: viewTargetOffsetRef.current.clone(),
+      };
+      userAdjustedZoomRef.current = true;
+      setViewerInteractionMode(mode);
+      mountElement.setPointerCapture(event.pointerId);
+    };
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const interaction = pointerInteractionRef.current;
+      if (!interaction || interaction.pointerId !== event.pointerId) return;
+
+      const dx = event.clientX - interaction.startX;
+      const dy = event.clientY - interaction.startY;
+
+      if (interaction.mode === "rotate") {
+        viewOrbitRef.current.azimuth = interaction.startAzimuth - dx * VIEW_ROTATE_SPEED;
+        viewOrbitRef.current.elevation = Math.max(
+          -VIEW_ELEVATION_LIMIT,
+          Math.min(VIEW_ELEVATION_LIMIT, interaction.startElevation - dy * VIEW_ROTATE_SPEED),
+        );
+      } else {
+        const target = new THREE.Vector3(
+          activeConfig.environment.W / 2,
+          0,
+          0,
+        ).add(interaction.startOffset);
+        const orbit = viewOrbitRef.current;
+        const planarDistance = orbit.distance * Math.cos(orbit.elevation);
+        const cameraPosition = new THREE.Vector3(
+          target.x + planarDistance * Math.sin(orbit.azimuth),
+          target.y + orbit.distance * Math.sin(orbit.elevation),
+          target.z + planarDistance * Math.cos(orbit.azimuth),
+        );
+        const forward = new THREE.Vector3().subVectors(target, cameraPosition).normalize();
+        const right = new THREE.Vector3().crossVectors(forward, camera.up).normalize();
+        const up = new THREE.Vector3().crossVectors(right, forward).normalize();
+        const visibleHeight = (2 * orbit.distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / Math.max(camera.zoom, 1e-6);
+        const visibleWidth = visibleHeight * Math.max(camera.aspect, 0.1);
+        const worldDelta = right
+          .multiplyScalar((-dx * visibleWidth) / Math.max(viewerSize.width, 1))
+          .add(up.multiplyScalar((dy * visibleHeight) / Math.max(viewerSize.height, 1)));
+        viewTargetOffsetRef.current.copy(interaction.startOffset).add(worldDelta);
+      }
+
+      applyAdaptiveView(viewZoomScaleRef.current, true);
+    };
+
+    const clearPointerInteraction = (pointerId?: number) => {
+      const interaction = pointerInteractionRef.current;
+      if (!interaction) return;
+      if (typeof pointerId === "number" && interaction.pointerId !== pointerId) return;
+      if (typeof pointerId === "number" && mountElement.hasPointerCapture(pointerId)) {
+        mountElement.releasePointerCapture(pointerId);
+      }
+      pointerInteractionRef.current = null;
+      setViewerInteractionMode("idle");
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      clearPointerInteraction(event.pointerId);
+    };
+
+    const handleContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+    };
+
+    mountElement.addEventListener("wheel", handleWheel, { passive: false });
+    mountElement.addEventListener("pointerdown", handlePointerDown);
+    mountElement.addEventListener("pointermove", handlePointerMove);
+    mountElement.addEventListener("pointerup", handlePointerUp);
+    mountElement.addEventListener("pointercancel", handlePointerUp);
+    mountElement.addEventListener("contextmenu", handleContextMenu);
+
     return () => {
       cancelAnimationFrame(raf);
+      resizeObserver.disconnect();
+      mountElement.removeEventListener("wheel", handleWheel);
+      mountElement.removeEventListener("pointerdown", handlePointerDown);
+      mountElement.removeEventListener("pointermove", handlePointerMove);
+      mountElement.removeEventListener("pointerup", handlePointerUp);
+      mountElement.removeEventListener("pointercancel", handlePointerUp);
+      mountElement.removeEventListener("contextmenu", handleContextMenu);
+      pointerInteractionRef.current = null;
+      setViewerInteractionMode("idle");
       Object.values(cableGeometryRefs.current).forEach((geometry) => geometry.dispose());
       cableGeometryRefs.current = {};
       Object.values(rigidMeshesRef.current).forEach((mesh) => {
@@ -450,6 +780,7 @@ export function App() {
       pocketWire.dispose();
       pocketMaterial.dispose();
       cableMaterials.forEach((material) => material.dispose());
+      cameraRef.current = null;
       renderer.dispose();
     };
   }, []);
@@ -466,6 +797,10 @@ export function App() {
   }, [activeConfig]);
 
   useEffect(() => {
+    applyAdaptiveView(viewZoomScaleRef.current, userAdjustedZoomRef.current);
+  }, [activeConfig, viewerSize]);
+
+  useEffect(() => {
     const rigidGroup = rigidGroupRef.current;
     if (!rigidGroup || !summary) return;
 
@@ -478,9 +813,15 @@ export function App() {
 
     summary.bead_metadata.bead_types.forEach((type, idx) => {
       if (type === "flex") return;
-      const radius = summary.bead_metadata.radii[idx] ?? (type === "junction" ? 0.035 : 0.03);
+      const radius =
+        summary.bead_metadata.radii[idx] ??
+        (type === "plug"
+          ? activeConfig.geometry.r_plug
+          : type === "junction"
+            ? activeConfig.geometry.r_junction
+            : activeConfig.geometry.r_earbud);
       const mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(Math.max(radius, 0.02), 18, 18),
+        new THREE.SphereGeometry(Math.max(radius, 0.005), 18, 18),
         new THREE.MeshStandardMaterial({
           color: type === "plug" ? 0x1f6feb : type === "junction" ? 0x2ea043 : 0xc73e1d,
         }),
@@ -488,7 +829,7 @@ export function App() {
       rigidMeshesRef.current[idx] = mesh;
       rigidGroup.add(mesh);
     });
-  }, [summary]);
+  }, [summary, activeConfig]);
 
   useEffect(() => {
     const frame = frames[frameIndex];
@@ -696,6 +1037,299 @@ export function App() {
     return () => chart.dispose();
   }, [trendData]);
 
+  useEffect(() => {
+    if (!runProgress?.started_at) {
+      setRunElapsedSeconds(0);
+      return;
+    }
+
+    if (!loadingRun) {
+      if (runProgress.finished_at) {
+        const startedAt = Date.parse(runProgress.started_at);
+        const finishedAt = Date.parse(runProgress.finished_at);
+        if (!Number.isNaN(startedAt) && !Number.isNaN(finishedAt)) {
+          setRunElapsedSeconds(Math.max(0, Math.floor((finishedAt - startedAt) / 1000)));
+        }
+      }
+      return;
+    }
+
+    const updateElapsed = () => {
+      const startedAt = Date.parse(runProgress.started_at);
+      if (Number.isNaN(startedAt)) return;
+      setRunElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+    };
+
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 1000);
+    return () => window.clearInterval(timer);
+  }, [loadingRun, runProgress?.started_at, runProgress?.finished_at]);
+
+  useEffect(() => {
+    if (!activeRunId) return;
+
+    let disposed = false;
+    let polling = false;
+    let consecutiveFailures = 0;
+    const runTaskId = activeRunId;
+
+    const pollProgress = async () => {
+      if (polling || disposed) return;
+      polling = true;
+      try {
+        const progressPayload = await loadRunProgress(runTaskId);
+        if (disposed) return;
+        consecutiveFailures = 0;
+        setRunProgress(progressPayload);
+
+        if (progressPayload.status === "finished") {
+          disposed = true;
+          setRunProgress({
+            ...progressPayload,
+            status: "loading_result",
+            phase: "loading_result",
+            error: "正在加载最终结果……",
+          });
+          try {
+            await loadRunResult(runTaskId);
+            setRunProgress({
+              ...progressPayload,
+              error: null,
+            });
+          } catch (error) {
+            console.error(error);
+            try {
+              const latestProgress = await loadRunProgress(runTaskId);
+              if (latestProgress.status === "cancelled") {
+                setRunProgress(latestProgress);
+              } else {
+                const resultMessage =
+                  error instanceof Error ? error.message : "加载单次模拟结果失败。";
+                setRunProgress({
+                  ...latestProgress,
+                  status: "failed",
+                  phase: "failed",
+                  error: resultMessage,
+                });
+                window.alert(resultMessage);
+              }
+            } catch (progressError) {
+              console.error(progressError);
+              const resultMessage =
+                error instanceof Error ? error.message : "加载单次模拟结果失败。";
+              setRunProgress({
+                ...progressPayload,
+                status: "failed",
+                phase: "failed",
+                error: resultMessage,
+              });
+              window.alert(resultMessage);
+            }
+          } finally {
+            setLoadingRun(false);
+            setActiveRunId((current) => (current === runTaskId ? "" : current));
+          }
+          return;
+        }
+
+        if (progressPayload.status === "failed" || progressPayload.status === "cancelled") {
+          setLoadingRun(false);
+          setActiveRunId((current) => (current === runTaskId ? "" : current));
+          if (progressPayload.error) {
+            window.alert(progressPayload.error);
+          }
+        }
+      } catch (error) {
+        if (disposed) return;
+        console.error(error);
+        consecutiveFailures += 1;
+        const retryMessage =
+          error instanceof Error ? error.message : "刷新单次模拟进度失败。";
+        setRunProgress((current) =>
+          current && current.run_id === runTaskId
+            ? {
+                ...current,
+                error:
+                  consecutiveFailures >= 5
+                    ? retryMessage
+                    : `${retryMessage} 正在重试进度同步（${consecutiveFailures}/5）……`,
+              }
+            : current,
+        );
+        if (consecutiveFailures >= 5) {
+          setRunProgress((current) =>
+            current && current.run_id === runTaskId
+              ? {
+                  ...current,
+                  status: "failed",
+                  phase: "failed",
+                  error: retryMessage,
+                }
+              : current,
+          );
+          setLoadingRun(false);
+          setActiveRunId((current) => (current === runTaskId ? "" : current));
+          window.alert(retryMessage);
+        }
+      } finally {
+        polling = false;
+      }
+    };
+
+    void pollProgress();
+    const timer = window.setInterval(() => {
+      void pollProgress();
+    }, 1000);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [activeRunId]);
+
+  useEffect(() => {
+    if (!batchProgress?.started_at) {
+      setBatchElapsedSeconds(0);
+      return;
+    }
+
+    if (!loadingBatch) {
+      if (batchProgress.finished_at) {
+        const startedAt = Date.parse(batchProgress.started_at);
+        const finishedAt = Date.parse(batchProgress.finished_at);
+        if (!Number.isNaN(startedAt) && !Number.isNaN(finishedAt)) {
+          setBatchElapsedSeconds(Math.max(0, Math.floor((finishedAt - startedAt) / 1000)));
+        }
+      }
+      return;
+    }
+
+    const updateElapsed = () => {
+      const startedAt = Date.parse(batchProgress.started_at);
+      if (Number.isNaN(startedAt)) return;
+      setBatchElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+    };
+
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 1000);
+    return () => window.clearInterval(timer);
+  }, [loadingBatch, batchProgress?.started_at]);
+
+  useEffect(() => {
+    if (!activeBatchId) return;
+
+    let disposed = false;
+    let polling = false;
+    let consecutiveFailures = 0;
+    const batchId = activeBatchId;
+
+    const pollProgress = async () => {
+      if (polling || disposed) return;
+      polling = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/batches/${batchId}/progress`);
+        if (!response.ok) {
+          throw new Error(`Batch progress request failed with status ${response.status}`);
+        }
+
+        const progressPayload: BatchProgress = await response.json();
+        if (disposed) return;
+        consecutiveFailures = 0;
+        setBatchProgress(progressPayload);
+
+        if (progressPayload.status === "finished") {
+          disposed = true;
+          setBatchProgress((current) =>
+            current && current.batch_id === batchId
+              ? {
+                  ...progressPayload,
+                  error: "正在加载最终结果……",
+                }
+              : current,
+          );
+          try {
+            await loadBatchResult(batchId);
+            setBatchProgress((current) =>
+              current && current.batch_id === batchId
+                ? {
+                    ...progressPayload,
+                    error: null,
+                  }
+                : current,
+            );
+          } catch (error) {
+            console.error(error);
+            const resultMessage =
+              error instanceof Error ? error.message : "加载批量结果失败。";
+            setBatchProgress((current) =>
+              current && current.batch_id === batchId
+                ? {
+                    ...current,
+                    status: "failed",
+                    error: resultMessage,
+                  }
+                : current,
+            );
+            window.alert(resultMessage);
+          } finally {
+            setLoadingBatch(false);
+            setActiveBatchId((current) => (current === batchId ? "" : current));
+          }
+          return;
+        }
+
+        if (progressPayload.status === "failed") {
+          setLoadingBatch(false);
+          setActiveBatchId((current) => (current === batchId ? "" : current));
+          throw new Error(progressPayload.error ?? "批量扫描失败。");
+        }
+      } catch (error) {
+        if (disposed) return;
+        console.error(error);
+        consecutiveFailures += 1;
+        const retryMessage =
+          error instanceof Error ? error.message : "刷新批量进度失败。";
+        setBatchProgress((current) =>
+          current && current.batch_id === batchId
+            ? {
+                ...current,
+                error:
+                  consecutiveFailures >= 5
+                    ? retryMessage
+                    : `${retryMessage} 正在重试进度同步（${consecutiveFailures}/5）……`,
+              }
+            : current,
+        );
+        if (consecutiveFailures >= 5) {
+          setBatchProgress((current) =>
+            current && current.batch_id === batchId
+              ? {
+                  ...current,
+                  status: "failed",
+                  error: retryMessage,
+                }
+              : current,
+          );
+          setLoadingBatch(false);
+          setActiveBatchId((current) => (current === batchId ? "" : current));
+          window.alert(retryMessage);
+        }
+      } finally {
+        polling = false;
+      }
+    };
+
+    void pollProgress();
+    const timer = window.setInterval(() => {
+      void pollProgress();
+    }, 1000);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [activeBatchId]);
+
   const summaryText = useMemo(() => {
     if (!summary) {
       return "先运行一次模拟，再查看缠结摘要与指标变化。";
@@ -708,6 +1342,7 @@ export function App() {
 
   const createRun = async () => {
     setLoadingRun(true);
+    let submittedRun = false;
     try {
       const payload = buildConfigFromForm(configForm);
       const response = await fetch(`${API_BASE}/api/simulations`, {
@@ -722,47 +1357,63 @@ export function App() {
 
       const result: RunResult = await response.json();
       if (!result.run_id) {
-        throw new Error("后端返回中缺少 run_id。");
+        throw new Error("Backend response is missing run_id.");
       }
 
       setRunId(result.run_id);
-      setActiveConfig(payload);
-
-      const [trajectoryRes, metricsRes, summaryRes] = await Promise.all([
-        fetch(`${API_BASE}/api/simulations/${result.run_id}/trajectory`),
-        fetch(`${API_BASE}/api/simulations/${result.run_id}/metrics`),
-        fetch(`${API_BASE}/api/simulations/${result.run_id}/summary`),
-      ]);
-
-      if (!trajectoryRes.ok || !metricsRes.ok || !summaryRes.ok) {
-        throw new Error("模拟结果读取失败，请检查后端输出。");
-      }
-
-      const [trajectory, metricsPayload, summaryPayload] = await Promise.all([
-        trajectoryRes.json(),
-        metricsRes.json(),
-        summaryRes.json(),
-      ]);
-
-      applySimulationSnapshot(
-        {
-          config: payload,
-          trajectory,
-          metrics: metricsPayload,
-          summary: summaryPayload,
-        },
-        result.run_id,
-      );
+      setRunProgress({
+        run_id: result.run_id,
+        task_id: result.run_id,
+        kind: "single",
+        status: "queued",
+        progress: 0,
+        started_at: new Date().toISOString(),
+        finished_at: null,
+        error: null,
+        phase: "queued",
+        current_step: 0,
+        total_steps: payload.control.num_steps,
+      });
+      setRunElapsedSeconds(0);
+      setActiveRunId(result.run_id);
+      submittedRun = true;
     } catch (error) {
       console.error(error);
-      window.alert(error instanceof Error ? error.message : "模拟运行失败。");
+      window.alert(error instanceof Error ? error.message : "Single simulation failed.");
     } finally {
-      setLoadingRun(false);
+      if (!submittedRun) {
+        setLoadingRun(false);
+      }
+    }
+  };
+
+  const cancelRun = async () => {
+    if (!activeRunId) return;
+    try {
+      setRunProgress((current) =>
+        current && current.run_id === activeRunId
+          ? {
+              ...current,
+              error: "正在请求中断单次模拟……",
+            }
+          : current,
+      );
+      const response = await fetch(`${API_BASE}/api/simulations/${activeRunId}/cancel`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        throw new Error(errorBody?.detail ?? `Simulation cancel failed with status ${response.status}`);
+      }
+    } catch (error) {
+      console.error(error);
+      window.alert(error instanceof Error ? error.message : "取消单次模拟失败。");
     }
   };
 
   const createBatch = async () => {
     setLoadingBatch(true);
+    let submittedBatch = false;
     try {
       const baseConfig = buildConfigFromForm(configForm);
       const values = parseBatchValues(batchValuesText);
@@ -786,27 +1437,44 @@ export function App() {
       }
 
       const batchResult: BatchResponse = await response.json();
-      if (batchResult.summary) {
-        setTrendError("");
-        setTrendData(batchResult.summary);
-      } else {
-        setTrendReloadToken((value) => value + 1);
-      }
-
-      if (batchResult.representative_run) {
-        applySimulationSnapshot(batchResult.representative_run, `${batchResult.batch_id} / sample`);
-      }
+      setBatchProgress({
+        batch_id: batchResult.batch_id,
+        status: "queued",
+        parameter: payload.parameter,
+        values,
+        repeats,
+        total_jobs: values.length * repeats,
+        completed_jobs: 0,
+        progress: 0,
+        current_value: null,
+        current_repeat: null,
+        started_at: new Date().toISOString(),
+        finished_at: null,
+        error: null,
+      });
+      setBatchElapsedSeconds(0);
+      setActiveBatchId(batchResult.batch_id);
+      submittedBatch = true;
     } catch (error) {
       console.error(error);
       window.alert(error instanceof Error ? error.message : "批量扫描失败。");
     } finally {
-      setLoadingBatch(false);
+      if (!submittedBatch) {
+        setLoadingBatch(false);
+      }
     }
   };
 
   const controlsBusy = loadingRun || loadingBatch;
   const currentFrame = frames[frameIndex];
   const currentThreadingEvents = currentFrame?.events.threading ?? [];
+  const runProgressPercent = Math.round((runProgress?.progress ?? 0) * 100);
+  const batchProgressPercent = Math.round((batchProgress?.progress ?? 0) * 100);
+  const batchParameterLabel =
+    batchProgress && isBatchParameter(batchProgress.parameter)
+      ? PARAMETER_LABELS[batchProgress.parameter]
+      : batchProgress?.parameter ?? PARAMETER_LABELS[batchParameter];
+  const runStatusLabel = runProgress ? RUN_STATUS_LABELS[runProgress.status] : RUN_STATUS_LABELS.queued;
 
   return (
     <div className="page">
@@ -829,6 +1497,31 @@ export function App() {
             {playing ? "暂停播放" : "继续播放"}
           </button>
         </div>
+        {runProgress ? (
+          <div className={`progress-panel ${runProgress.status === "failed" || runProgress.status === "cancelled" ? "is-error" : ""}`}>
+            <div className="progress-heading">
+              <strong>{runStatusLabel}</strong>
+              <span>
+                {runProgress.current_step} / {runProgress.total_steps}
+              </span>
+            </div>
+            <div className="progress-bar" aria-hidden="true">
+              <div className="progress-bar-fill" style={{ width: `${runProgressPercent}%` }} />
+            </div>
+            <p className="meta">当前阶段：{RUN_PHASE_LABELS[runProgress.phase ?? "queued"] ?? runProgress.phase ?? "queued"}</p>
+            <p className="meta">当前进度：{runProgressPercent}%</p>
+            <p className="meta">当前步数：{runProgress.current_step} / {runProgress.total_steps}</p>
+            <p className="meta">已运行：{formatDuration(runElapsedSeconds)}</p>
+            {runProgress.error ? <p className="meta">{runProgress.error}</p> : null}
+            {(runProgress.status === "running" || runProgress.status === "loading_result") && activeRunId ? (
+              <div className="progress-actions">
+                <button type="button" onClick={() => void cancelRun()} className="secondary-button">
+                  取消单次模拟
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="grid">
@@ -951,13 +1644,59 @@ export function App() {
               <p className="meta">
                 批量扫描会固定其它参数，只改变一个参数，并对每个参数值重复多次，最后汇总平均穿线概率和平均缠结评分。
               </p>
+              {batchProgress ? (
+                <div className={`progress-panel ${batchProgress.status === "failed" ? "is-error" : ""}`}>
+                  <div className="progress-heading">
+                    <strong>
+                      {batchProgress.status === "finished"
+                        ? "批量扫描已完成"
+                        : batchProgress.status === "loading_result"
+                          ? "正在加载批量结果"
+                        : batchProgress.status === "failed"
+                          ? "批量扫描失败"
+                          : "批量扫描进行中"}
+                    </strong>
+                    <span>
+                      {batchProgress.completed_jobs} / {batchProgress.total_jobs}
+                    </span>
+                  </div>
+                  <div className="progress-bar" aria-hidden="true">
+                    <div className="progress-bar-fill" style={{ width: `${batchProgressPercent}%` }} />
+                  </div>
+                  <p className="meta">扫描参数：{batchParameterLabel}</p>
+                  <p className="meta">当前进度：{batchProgressPercent}%</p>
+                  <p className="meta">
+                    当前任务：
+                    {batchProgress.current_value === null || batchProgress.current_repeat === null
+                      ? "等待后端开始计算"
+                      : `${formatNumber(batchProgress.current_value)}，第 ${batchProgress.current_repeat} / ${batchProgress.repeats} 次重复`}
+                  </p>
+                  <p className="meta">已运行：{formatDuration(batchElapsedSeconds)}</p>
+                  {batchProgress.error ? <p className="meta">{batchProgress.error}</p> : null}
+                </div>
+              ) : null}
             </div>
           </div>
         </section>
 
         <section className="card wide">
           <h2>三维模拟视图</h2>
-          <div ref={mountRef} className="viewer" />
+          <div className={`viewer-shell ${viewerInteractionMode === "rotate" ? "is-rotating" : ""} ${viewerInteractionMode === "pan" ? "is-panning" : ""}`}>
+            <div className="viewer-toolbar">
+              <span className="viewer-badge">缩放 {viewZoomScale.toFixed(2)}x</span>
+              <button type="button" className="viewer-tool-button" onClick={fitViewportView}>
+                适应视图
+              </button>
+              <button
+                type="button"
+                className="viewer-tool-button"
+                onClick={() => applyAdaptiveView(1, false)}
+              >
+                重置缩放
+              </button>
+            </div>
+            <div ref={mountRef} className="viewer" />
+          </div>
           <p className="meta">当前运行 ID：{runId || "尚未运行"}</p>
           <p className="meta">
             橙色线段表示非局部接触；被放大的刚性端表示它参与了当前帧的穿线代理事件。口袋边框尺寸与当前模拟参数一致。

@@ -114,10 +114,59 @@ button:disabled {
 
 .viewer {
   width: 100%;
-  min-height: 440px;
+  min-height: 560px;
   border-radius: 18px;
   overflow: hidden;
   background: #f4f1e8;
+  cursor: grab;
+  touch-action: none;
+}
+
+.viewer:active {
+  cursor: grabbing;
+}
+
+.viewer-shell.is-rotating .viewer,
+.viewer-shell.is-panning .viewer {
+  cursor: grabbing;
+}
+
+.viewer-shell {
+  position: relative;
+}
+
+.viewer-toolbar {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.viewer-badge {
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #3e3225;
+  border: 1px solid rgba(95, 73, 40, 0.14);
+  box-shadow: 0 8px 24px rgba(61, 40, 14, 0.12);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.viewer-tool-button {
+  padding: 8px 14px;
+  background: rgba(31, 35, 40, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 8px 24px rgba(61, 40, 14, 0.12);
+}
+
+.viewer-tool-button:hover {
+  background: rgba(18, 21, 25, 0.92);
 }
 
 .chart {
@@ -142,6 +191,62 @@ button:disabled {
   color: #5f4d38;
 }
 
+.progress-panel {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(95, 73, 40, 0.16);
+}
+
+.progress-panel.is-error {
+  border-color: rgba(199, 62, 29, 0.45);
+  background: rgba(255, 241, 237, 0.94);
+}
+
+.progress-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: #3e3225;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(95, 73, 40, 0.12);
+}
+
+.progress-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #d65a31, #f0a44a);
+  transition: width 0.3s ease;
+}
+
+.progress-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.secondary-button {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(95, 73, 40, 0.2);
+  background: rgba(255, 255, 255, 0.9);
+  color: #3e3225;
+  box-shadow: 0 8px 24px rgba(61, 40, 14, 0.08);
+}
+
+.secondary-button:hover:not(:disabled) {
+  background: rgba(245, 241, 232, 0.98);
+}
+
 @media (max-width: 980px) {
   .grid {
     grid-template-columns: 1fr;
@@ -157,5 +262,14 @@ button:disabled {
 
   .hero {
     flex-direction: column;
+  }
+
+  .viewer {
+    min-height: 420px;
+  }
+
+  .viewer-toolbar {
+    left: 14px;
+    right: 14px;
   }
 }

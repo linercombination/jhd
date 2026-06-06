@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 from statistics import mean, pstdev
-from typing import Any
+from typing import Any, Callable
 
 from .dynamics import simulate_trajectory
+from .exceptions import SimulationCancelled
 from .events import (
     compute_contact_persistence,
     compute_frame_metrics,
@@ -24,16 +25,61 @@ def _validate_batch_value(parameter: str, value: float) -> None:
         raise ValueError(f"{parameter} must be between 0 and 1, got {value}")
 
 
-def run_simulation(config: dict[str, Any]) -> dict[str, Any]:
+def run_simulation(
+    config: dict[str, Any],
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    cancel_event: Any = None,
+) -> dict[str, Any]:
+    total_steps = config["control"]["num_steps"]
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "status": "running",
+                "phase": "init",
+                "progress": 0.02,
+                "current_step": 0,
+                "total_steps": total_steps,
+            }
+        )
     model = build_initial_geometry(config)
-    trajectory = simulate_trajectory(model, config)
+    if cancel_event is not None and cancel_event.is_set():
+        raise SimulationCancelled("Simulation cancelled.")
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "status": "running",
+                "phase": "simulate",
+                "progress": 0.05,
+                "current_step": 0,
+                "total_steps": total_steps,
+            }
+        )
+    trajectory = simulate_trajectory(
+        model,
+        config,
+        progress_callback=lambda update: progress_callback(
+            {
+                "status": "running",
+                "phase": update["phase"],
+                "progress": 0.05 + 0.75 * update["progress"],
+                "current_step": update["current_step"],
+                "total_steps": update["total_steps"],
+            }
+        )
+        if progress_callback is not None
+        else None,
+        cancel_event=cancel_event,
+    )
 
     frames: list[dict[str, Any]] = []
     metrics_series: list[dict[str, float]] = []
     frame_contacts: list[list[list[int]]] = []
     frame_threading_candidates: list[list[str]] = []
 
-    for frame in trajectory:
+    total_frames = max(1, len(trajectory))
+    for frame_index, frame in enumerate(trajectory):
+        if cancel_event is not None and cancel_event.is_set():
+            raise SimulationCancelled("Simulation cancelled.")
         contacts = detect_contacts(
             frame["positions"],
             model["radii"],
@@ -50,6 +96,16 @@ def run_simulation(config: dict[str, Any]) -> dict[str, Any]:
         )
         frame_contacts.append(contacts)
         frame_threading_candidates.append(threading_candidates)
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "status": "running",
+                    "phase": "postprocess",
+                    "progress": 0.82 + 0.08 * ((frame_index + 1) / total_frames),
+                    "current_step": total_steps,
+                    "total_steps": total_steps,
+                }
+            )
 
     persistent_threading_per_frame = update_persistent_threading(
         frame_threading_candidates,
@@ -60,13 +116,15 @@ def run_simulation(config: dict[str, Any]) -> dict[str, Any]:
         min_persistent_frames=2,
     )
 
-    for frame, contacts, threading, persistence_value in zip(
+    for frame_index, (frame, contacts, threading, persistence_value) in enumerate(zip(
         trajectory,
         frame_contacts,
         persistent_threading_per_frame,
         contact_persistence,
         strict=False,
-    ):
+    )):
+        if cancel_event is not None and cancel_event.is_set():
+            raise SimulationCancelled("Simulation cancelled.")
         metric = compute_frame_metrics(contacts, threading, persistence_value)
         metric["time"] = frame["time"]
         metrics_series.append(metric)
@@ -77,6 +135,16 @@ def run_simulation(config: dict[str, Any]) -> dict[str, Any]:
                 "events": {"contacts": contacts, "threading": threading},
             }
         )
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "status": "running",
+                    "phase": "postprocess",
+                    "progress": 0.9 + 0.1 * ((frame_index + 1) / total_frames),
+                    "current_step": total_steps,
+                    "total_steps": total_steps,
+                }
+            )
 
     threading_event_ids = sorted({event_id for frame_events in persistent_threading_per_frame for event_id in frame_events})
     summary = {
@@ -97,14 +165,44 @@ def run_simulation(config: dict[str, Any]) -> dict[str, Any]:
             "arm_segments": model["arm_segments"],
         },
     }
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "status": "running",
+                "phase": "postprocess",
+                "progress": 1.0,
+                "current_step": total_steps,
+                "total_steps": total_steps,
+            }
+        )
     return {"trajectory": frames, "metrics": metrics_series, "summary": summary}
 
 
-def run_batch(batch_config: dict[str, Any]) -> dict[str, Any]:
+def run_batch(
+    batch_config: dict[str, Any],
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     parameter = batch_config["parameter"]
     values = batch_config["values"]
     repeats = batch_config["repeats"]
     base_config = batch_config["base_config"]
+    total_jobs = len(values) * repeats
+    completed_jobs = 0
+
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "status": "running",
+                "parameter": parameter,
+                "values": values,
+                "repeats": repeats,
+                "total_jobs": total_jobs,
+                "completed_jobs": completed_jobs,
+                "current_value": None,
+                "current_repeat": None,
+                "progress": 0.0,
+            }
+        )
 
     results: list[dict[str, Any]] = []
     representative_run: dict[str, Any] | None = None
@@ -133,6 +231,21 @@ def run_batch(batch_config: dict[str, Any]) -> dict[str, Any]:
             threading_probs.append(1.0 if result["summary"]["threading_ever"] else 0.0)
             representative_run = result
             representative_config = deepcopy(config)
+            completed_jobs += 1
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "status": "running",
+                        "parameter": parameter,
+                        "values": values,
+                        "repeats": repeats,
+                        "total_jobs": total_jobs,
+                        "completed_jobs": completed_jobs,
+                        "current_value": value,
+                        "current_repeat": repeat + 1,
+                        "progress": completed_jobs / total_jobs if total_jobs else 1.0,
+                    }
+                )
 
         results.append(
             {
