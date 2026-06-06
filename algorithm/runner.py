@@ -107,6 +107,8 @@ def run_batch(batch_config: dict[str, Any]) -> dict[str, Any]:
     base_config = batch_config["base_config"]
 
     results: list[dict[str, Any]] = []
+    representative_run: dict[str, Any] | None = None
+    representative_config: dict[str, Any] | None = None
     for value in values:
         _validate_batch_value(parameter, value)
         run_scores: list[float] = []
@@ -129,6 +131,8 @@ def run_batch(batch_config: dict[str, Any]) -> dict[str, Any]:
             result = run_simulation(config)
             run_scores.append(result["summary"]["tangle_score_mean"])
             threading_probs.append(1.0 if result["summary"]["threading_ever"] else 0.0)
+            representative_run = result
+            representative_config = deepcopy(config)
 
         results.append(
             {
@@ -142,4 +146,22 @@ def run_batch(batch_config: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
-    return {"parameter": parameter, "results": results}
+    summary = {
+        "parameter": parameter,
+        "results": results,
+        "repeats": repeats,
+    }
+
+    representative_payload = None
+    if representative_run is not None and representative_config is not None:
+        representative_payload = {
+            "config": representative_config,
+            "trajectory": representative_run["trajectory"],
+            "metrics": representative_run["metrics"],
+            "summary": representative_run["summary"],
+        }
+
+    return {
+        "summary": summary,
+        "representative_run": representative_payload,
+    }

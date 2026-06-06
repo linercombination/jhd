@@ -98,6 +98,26 @@ type TrendResult = {
   repeats: number;
 };
 
+type BatchSummary = {
+  parameter: string;
+  results: TrendResult[];
+  repeats?: number;
+};
+
+type SimulationSnapshot = {
+  config: SimulationConfig;
+  trajectory: Frame[];
+  metrics: MetricRow[];
+  summary: Summary;
+};
+
+type BatchResponse = {
+  batch_id: string;
+  status: string;
+  summary?: BatchSummary;
+  representative_run?: SimulationSnapshot | null;
+};
+
 const API_BASE = "http://localhost:8000";
 
 const DEFAULT_CONFIG: SimulationConfig = {
@@ -158,6 +178,10 @@ function toFormState(config: SimulationConfig): SimulationConfigForm {
       Object.entries(config.control).map(([key, value]) => [key, String(value)]),
     ) as SimulationConfigForm["control"],
   };
+}
+
+function isBatchParameter(value: string): value is BatchParameter {
+  return Object.prototype.hasOwnProperty.call(PARAMETER_LABELS, value);
 }
 
 function parseRequiredNumber(value: string, label: string): number {
@@ -322,6 +346,7 @@ export function App() {
   const [loadingRun, setLoadingRun] = useState(false);
   const [loadingBatch, setLoadingBatch] = useState(false);
   const [trendReloadToken, setTrendReloadToken] = useState(0);
+  const [trendData, setTrendData] = useState<BatchSummary | null>(null);
   const [trendError, setTrendError] = useState("");
   const [configForm, setConfigForm] = useState<SimulationConfigForm>(toFormState(DEFAULT_CONFIG));
   const [batchParameter, setBatchParameter] = useState<BatchParameter>("k_bend");
@@ -340,6 +365,17 @@ export function App() {
         [key]: value,
       },
     }));
+  };
+
+  const applySimulationSnapshot = (snapshot: SimulationSnapshot, nextRunId: string) => {
+    setRunId(nextRunId);
+    setActiveConfig(snapshot.config);
+    setConfigForm(toFormState(snapshot.config));
+    setFrames(snapshot.trajectory);
+    setMetrics(snapshot.metrics);
+    setSummary(snapshot.summary);
+    setFrameIndex(0);
+    setPlaying(true);
   };
 
   useEffect(() => {
@@ -536,7 +572,6 @@ export function App() {
   useEffect(() => {
     const controller = new AbortController();
     let disposed = false;
-    let chart: echarts.ECharts | undefined;
 
     const run = async () => {
       setTrendError("");
@@ -545,50 +580,21 @@ export function App() {
         throw new Error(`Trend request failed with status ${response.status}`);
       }
       const trendPayload = await response.json();
-      if (disposed || !trendRef.current) return;
+      if (disposed) return;
       if (!Array.isArray(trendPayload) || trendPayload.length === 0) {
+        setTrendData(null);
         setTrendError("还没有批量扫描结果，请先运行一次参数扫描。");
         return;
       }
 
       const latest = trendPayload[trendPayload.length - 1];
-      const results = latest?.summary?.results as TrendResult[] | undefined;
-      const parameter = latest?.summary?.parameter as BatchParameter | undefined;
-      if (!Array.isArray(results) || results.length === 0) {
+      const latestSummary = latest?.summary as BatchSummary | undefined;
+      if (!latestSummary || !Array.isArray(latestSummary.results) || latestSummary.results.length === 0) {
+        setTrendData(null);
         setTrendError("最近一次批量扫描没有可展示的结果。");
         return;
       }
-
-      chart = echarts.init(trendRef.current);
-      chart.setOption({
-        tooltip: { trigger: "axis" },
-        title: { text: `参数趋势：${parameter ? PARAMETER_LABELS[parameter] : "最近一次扫描"}` },
-        legend: { data: ["平均穿线概率", "平均缠结评分"] },
-        xAxis: {
-          type: "category",
-          name: "参数值",
-          data: results.map((row) => String(row.value)),
-        },
-        yAxis: [
-          { type: "value", name: "平均穿线概率" },
-          { type: "value", name: "平均缠结评分" },
-        ],
-        series: [
-          {
-            type: "line",
-            name: "平均穿线概率",
-            data: results.map((row) => row.mean_threading_probability),
-            smooth: true,
-          },
-          {
-            type: "line",
-            name: "平均缠结评分",
-            yAxisIndex: 1,
-            data: results.map((row) => row.mean_tangle_score),
-            smooth: true,
-          },
-        ],
-      });
+      setTrendData(latestSummary);
     };
 
     run().catch((error: unknown) => {
@@ -600,9 +606,95 @@ export function App() {
     return () => {
       disposed = true;
       controller.abort();
-      chart?.dispose();
     };
   }, [trendReloadToken]);
+
+  useEffect(() => {
+    if (!trendRef.current || !trendData || trendData.results.length === 0) return;
+
+    const chart = echarts.init(trendRef.current);
+    const sortedResults = [...trendData.results].sort((left, right) => left.value - right.value);
+    const parameterLabel = isBatchParameter(trendData.parameter)
+      ? PARAMETER_LABELS[trendData.parameter]
+      : trendData.parameter;
+
+    chart.setOption({
+      tooltip: { trigger: "axis" },
+      title: {
+        text: `参数趋势：${parameterLabel}`,
+        subtext: `重复次数：${sortedResults[0]?.repeats ?? trendData.repeats ?? 0}`,
+      },
+      legend: {
+        data: [
+          "平均穿线概率",
+          "穿线概率 +1σ",
+          "穿线概率 -1σ",
+          "平均缠结评分",
+          "缠结评分 +1σ",
+          "缠结评分 -1σ",
+        ],
+      },
+      xAxis: {
+        type: "value",
+        name: "参数值",
+      },
+      yAxis: [
+        { type: "value", name: "平均穿线概率", min: 0 },
+        { type: "value", name: "平均缠结评分", min: 0 },
+      ],
+      series: [
+        {
+          type: "line",
+          name: "平均穿线概率",
+          data: sortedResults.map((row) => [row.value, row.mean_threading_probability]),
+          smooth: true,
+        },
+        {
+          type: "line",
+          name: "穿线概率 +1σ",
+          data: sortedResults.map((row) => [row.value, row.mean_threading_probability + row.std_threading_probability]),
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { type: "dashed", opacity: 0.55 },
+        },
+        {
+          type: "line",
+          name: "穿线概率 -1σ",
+          data: sortedResults.map((row) => [row.value, Math.max(0, row.mean_threading_probability - row.std_threading_probability)]),
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { type: "dashed", opacity: 0.55 },
+        },
+        {
+          type: "line",
+          name: "平均缠结评分",
+          yAxisIndex: 1,
+          data: sortedResults.map((row) => [row.value, row.mean_tangle_score]),
+          smooth: true,
+        },
+        {
+          type: "line",
+          name: "缠结评分 +1σ",
+          yAxisIndex: 1,
+          data: sortedResults.map((row) => [row.value, row.mean_tangle_score + row.std_tangle_score]),
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { type: "dashed", opacity: 0.55 },
+        },
+        {
+          type: "line",
+          name: "缠结评分 -1σ",
+          yAxisIndex: 1,
+          data: sortedResults.map((row) => [row.value, Math.max(0, row.mean_tangle_score - row.std_tangle_score)]),
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { type: "dashed", opacity: 0.55 },
+        },
+      ],
+    });
+
+    return () => chart.dispose();
+  }, [trendData]);
 
   const summaryText = useMemo(() => {
     if (!summary) {
@@ -652,10 +744,15 @@ export function App() {
         summaryRes.json(),
       ]);
 
-      setFrames(trajectory);
-      setMetrics(metricsPayload);
-      setSummary(summaryPayload);
-      setFrameIndex(0);
+      applySimulationSnapshot(
+        {
+          config: payload,
+          trajectory,
+          metrics: metricsPayload,
+          summary: summaryPayload,
+        },
+        result.run_id,
+      );
     } catch (error) {
       console.error(error);
       window.alert(error instanceof Error ? error.message : "模拟运行失败。");
@@ -688,7 +785,17 @@ export function App() {
         throw new Error(errorBody?.detail ?? `Batch request failed with status ${response.status}`);
       }
 
-      setTrendReloadToken((value) => value + 1);
+      const batchResult: BatchResponse = await response.json();
+      if (batchResult.summary) {
+        setTrendError("");
+        setTrendData(batchResult.summary);
+      } else {
+        setTrendReloadToken((value) => value + 1);
+      }
+
+      if (batchResult.representative_run) {
+        applySimulationSnapshot(batchResult.representative_run, `${batchResult.batch_id} / sample`);
+      }
     } catch (error) {
       console.error(error);
       window.alert(error instanceof Error ? error.message : "批量扫描失败。");

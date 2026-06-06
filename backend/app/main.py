@@ -94,6 +94,23 @@ def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _read_representative_run(batch_dir: Path) -> dict[str, Any] | None:
+    config_path = batch_dir / "representative_config.json"
+    trajectory_path = batch_dir / "representative_trajectory.json"
+    metrics_path = batch_dir / "representative_metrics.json"
+    summary_path = batch_dir / "representative_summary.json"
+    required_paths = [config_path, trajectory_path, metrics_path, summary_path]
+    if not all(path.exists() for path in required_paths):
+        return None
+
+    return {
+        "config": _read_json(config_path),
+        "trajectory": _read_json(trajectory_path),
+        "metrics": _read_json(metrics_path),
+        "summary": _read_json(summary_path),
+    }
+
+
 @app.get("/")
 def root() -> dict[str, str]:
     return {"status": "ok", "service": "earphone-tangling-demo"}
@@ -163,7 +180,7 @@ def get_summary(run_id: str) -> Any:
 
 
 @app.post("/api/batches")
-def create_batch(request: BatchRequest) -> dict[str, str]:
+def create_batch(request: BatchRequest) -> dict[str, Any]:
     batch_id = f"batch_{uuid4().hex[:12]}"
     batch_dir = RUNS_DIR / batch_id
     batch_dir.mkdir(parents=True, exist_ok=True)
@@ -171,8 +188,22 @@ def create_batch(request: BatchRequest) -> dict[str, str]:
         config = request.model_dump()
         _write_json(batch_dir / "batch_config.json", config)
         result = run_batch(config)
-        _write_json(batch_dir / "summary.json", result)
-        return {"batch_id": batch_id, "status": "finished"}
+        summary_payload = result["summary"]
+        _write_json(batch_dir / "summary.json", summary_payload)
+
+        representative_run = result.get("representative_run")
+        if representative_run:
+            _write_json(batch_dir / "representative_config.json", representative_run["config"])
+            _write_json(batch_dir / "representative_trajectory.json", representative_run["trajectory"])
+            _write_json(batch_dir / "representative_metrics.json", representative_run["metrics"])
+            _write_json(batch_dir / "representative_summary.json", representative_run["summary"])
+
+        return {
+            "batch_id": batch_id,
+            "status": "finished",
+            "summary": summary_payload,
+            "representative_run": representative_run,
+        }
     except ValueError as exc:
         shutil.rmtree(batch_dir, ignore_errors=True)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -187,7 +218,11 @@ def get_batch(batch_id: str) -> dict[str, Any]:
     batch_dir = RUNS_DIR / batch_id
     if not batch_dir.exists():
         raise HTTPException(status_code=404, detail="Batch not found")
-    return {"batch_id": batch_id, "summary": _read_json(batch_dir / "summary.json")}
+    return {
+        "batch_id": batch_id,
+        "summary": _read_json(batch_dir / "summary.json"),
+        "representative_run": _read_representative_run(batch_dir),
+    }
 
 
 @app.get("/api/batches/{batch_id}/summary")
@@ -198,7 +233,7 @@ def get_batch_summary(batch_id: str) -> Any:
 @app.get("/api/analysis/trends")
 def get_trends() -> list[dict[str, Any]]:
     trends: list[dict[str, Any]] = []
-    for entry in sorted(RUNS_DIR.glob("batch_*")):
+    for entry in sorted(RUNS_DIR.glob("batch_*"), key=lambda path: path.stat().st_mtime):
         summary_path = entry / "summary.json"
         if summary_path.exists():
             payload = _read_json(summary_path)
